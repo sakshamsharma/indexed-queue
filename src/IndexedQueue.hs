@@ -93,3 +93,10 @@ getItemsTimeout idx timeout = do
       return $ x ++ res
     _ -> do
       getMsgsTimeout idx timeout
+
+addToQueue :: (Eq msgIndex, Hashable msgIndex) => msgType ->
+              StateT (IndexedQueue bareRep msgType msgIndex) IO ()
+addToQueue msg = do
+  items <- gets itemsInternal
+  getIdx <- gets msgToIndex
+  modify $ \s -> s { itemsInternal = H.insertWith (++) (getIdx msg) [msg] items }

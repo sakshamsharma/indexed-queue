@@ -67,3 +67,12 @@ spec = hspec $ do
       (_, newState) <- runStateT (getItemBlocking testKey) iq
       let items = (itemsInternal newState)
       H.keys items `shouldBe` []
+
+  describe "addToQueue" $ do
+    it "is able to add messages to queue which can be fetched" $ do
+      (_, outch, iq) <- setup
+      let action = do
+            addToQueue testMsg
+            getItemBlocking testKey
+      (recvMsg, _) <- runStateT action iq
+      recvMsg `shouldBe` testMsg
