@@ -47,6 +47,20 @@ spec = hspec $ do
       let items = (itemsInternal newState)
       H.keys items `shouldBe` []
 
+  describe "getItemTimeout" $ do
+    it "gets a single item on a timeout of 1 ms" $ do
+      (inch, outch, iq) <- setup
+      _ <- writeChan inch $ show testMsg
+      (recvMsg, _) <- runStateT (getItemTimeout testKey 1000) iq
+      recvMsg `shouldBe` (Just testMsg)
+
+    it "has no other messages left in state after finishing" $ do
+      (inch, outch, iq) <- setup
+      mapM (\i -> writeChan inch $ show $ testMsgIndexContent i) [0..10]
+      (_, newState) <- runStateT (getItemTimeout testKey 1000) iq
+      let items = (itemsInternal newState)
+      H.keys items `shouldBe` []
+
   describe "getItemsTimeout" $ do
     it "gets a single item on a timeout of 1 ms" $ do
       (inch, outch, iq) <- setup

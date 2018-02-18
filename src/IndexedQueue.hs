@@ -31,9 +31,9 @@ takeUntilTime limit list = do
             []   -> return []
             x:xs -> evaluate x /:/ tryTake xs
 
-storeMsgsForLater :: (Eq msgIndex, Hashable msgIndex) => OutChan bareRep -> [msgType] ->
+storeMsgsForLater :: (Eq msgIndex, Hashable msgIndex) => [msgType] ->
                      StateT (IndexedQueue bareRep msgType msgIndex) IO ()
-storeMsgsForLater ch msgs = do
+storeMsgsForLater msgs = do
   ch <- gets channel
   conv <- gets bareToMsg
   getIdx <- gets msgToIndex
@@ -51,7 +51,7 @@ fromChan idx ch getIdx conv newMsgs = do
   bare <- liftIO $ readChan ch
   let msg = conv bare
   if (getIdx msg == idx) then do
-    storeMsgsForLater ch newMsgs
+    storeMsgsForLater newMsgs
     return msg
     else fromChan idx ch getIdx conv (msg:newMsgs)
 
@@ -65,7 +65,7 @@ getMsgsTimeout idx timeout = do
   bareMsgs <- liftIO $ takeUntilTime timeout m
   let msgs = conv `map` bareMsgs
   let (toUse, toStore) = ((== idx) . getIdx) `partition` msgs
-  storeMsgsForLater ch toStore
+  storeMsgsForLater toStore
   return toUse
 
 getItemBlocking :: (Eq msgIndex, Hashable msgIndex) =>
@@ -81,6 +81,16 @@ getItemBlocking idx = do
       conv <- gets bareToMsg
       getIdx <- gets msgToIndex
       fromChan idx ch getIdx conv []
+
+getItemTimeout :: (Eq msgIndex, Hashable msgIndex) => msgIndex -> Int ->
+                   StateT (IndexedQueue bareRep msgType msgIndex) IO (Maybe msgType)
+getItemTimeout idx timeout = do
+  items <- getItemsTimeout idx timeout
+  case items of
+    (x:xs) -> do
+      storeMsgsForLater xs
+      return $ Just x
+    _ -> return Nothing
 
 getItemsTimeout :: (Eq msgIndex, Hashable msgIndex) => msgIndex -> Int ->
                    StateT (IndexedQueue bareRep msgType msgIndex) IO [msgType]
