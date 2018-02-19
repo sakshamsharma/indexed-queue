@@ -1,10 +1,11 @@
-import           Control.Exception             (evaluate)
+import           Control.Exception                        (evaluate)
 import           Test.Hspec
 
-import           Control.Concurrent            (threadDelay)
-import           Control.Concurrent.Chan.Unagi
-import           Control.Monad.State.Strict
-import qualified Data.HashMap.Strict           as H
+import           Control.Concurrent                       (threadDelay)
+import           Control.Concurrent.Chan.Unagi.NoBlocking
+import           Control.Monad.State.Lazy
+import qualified Data.HashMap.Strict                      as H
+import           Pipes
 
 import           IndexedQueue
 
@@ -33,60 +34,92 @@ testMsgIndexContent i = Msg { contents = show i , key = testKey }
 
 spec :: IO ()
 spec = hspec $ do
-  describe "getItemBlocking" $ do
-    it "gets a single item" $ do
+  describe "myEffc" $ do
+    it "runs lol" $ do
       (inch, outch, iq) <- setup
-      _ <- writeChan inch $ show testMsg
-      (recvMsg, _) <- runStateT (getItemBlocking testKey) iq
-      recvMsg `shouldBe` testMsg
+      let msgs = (\i -> testMsgIndexContent i) `map` [0..9]
+      mapM (writeChan inch . show) msgs
+      (_, _) <- runStateT (runEffect (myEffc testKey 5000 print (\_ -> True) ())) iq
+      True `shouldBe` True
 
-    it "has no other messages left in state after finishing" $ do
-      (inch, outch, iq) <- setup
-      _ <- writeChan inch $ show testMsg
-      (_, newState) <- runStateT (getItemBlocking testKey) iq
-      let items = (itemsInternal newState)
-      H.keys items `shouldBe` []
+    -- it "gets a single item on a timeout of 1 ms" $ do
+    --   (inch, outch, iq) <- setup
+    --   _ <- writeChan inch $ show testMsg
+    --   x <- take 1 <$> getItemsTimeout iq testKey 1
+    --   (snd . head) x `shouldBe` Just testMsg
+
+    -- it "gets 10 items on a timeout of 4000 ms" $ do
+    --   (inch, outch, iq) <- setup
+    --   let msgs = (\i -> testMsgIndexContent i) `map` [0..9]
+    --   mapM (writeChan inch . show) msgs
+    --   x <- take 5 <$> getItemsTimeout iq testKey 4000
+    --   map snd x `shouldBe` take 5 (map Just msgs)
 
   describe "getItemTimeout" $ do
     it "gets a single item on a timeout of 1 ms" $ do
       (inch, outch, iq) <- setup
       _ <- writeChan inch $ show testMsg
-      (recvMsg, _) <- runStateT (getItemTimeout testKey 1000) iq
+      (recvMsg, _) <- runStateT (getItemTimeout testKey 1) iq
+      recvMsg `shouldBe` (Just testMsg)
+
+    it "gets a single item quickly on a timeout of 10000 ms" $ do
+      (inch, outch, iq) <- setup
+      _ <- writeChan inch $ show testMsg
+      (recvMsg, _) <- runStateT (getItemTimeout testKey 10000) iq
       recvMsg `shouldBe` (Just testMsg)
 
     it "has no other messages left in state after finishing" $ do
       (inch, outch, iq) <- setup
       mapM (\i -> writeChan inch $ show $ testMsgIndexContent i) [0..10]
-      (_, newState) <- runStateT (getItemTimeout testKey 1000) iq
+      (_, newState) <- runStateT (getItemTimeout testKey 1) iq
       let items = (itemsInternal newState)
       H.keys items `shouldBe` []
 
-  describe "getItemsTimeout" $ do
-    it "gets a single item on a timeout of 1 ms" $ do
+    it "times out when no message is sent" $ do
       (inch, outch, iq) <- setup
-      _ <- writeChan inch $ show testMsg
-      (recvMsg, _) <- runStateT (getItemsTimeout testKey 1000) iq
-      recvMsg `shouldBe` [testMsg]
+      (recvMsg, _) <- runStateT (getItemTimeout testKey 1000) iq
+      recvMsg `shouldBe` Nothing
 
-    it "gets 10 items on a timeout of 10 ms" $ do
-      (inch, outch, iq) <- setup
-      let msgs = (\i -> testMsgIndexContent i) `map` [0..10]
-      mapM (writeChan inch . show) msgs
-      (recvMsg, _) <- runStateT (getItemsTimeout testKey 10000) iq
-      recvMsg `shouldBe` msgs
+  -- describe "getItemBlocking" $ do
+  --   it "gets a single item" $ do
+  --     (inch, outch, iq) <- setup
+  --     _ <- writeChan inch $ show testMsg
+  --     (recvMsg, _) <- runStateT (getItemBlocking testKey) iq
+  --     recvMsg `shouldBe` testMsg
 
-    it "has no other messages left in state after finishing" $ do
-      (inch, outch, iq) <- setup
-      mapM (\i -> writeChan inch $ show $ testMsgIndexContent i) [0..10]
-      (_, newState) <- runStateT (getItemBlocking testKey) iq
-      let items = (itemsInternal newState)
-      H.keys items `shouldBe` []
+  --   it "has no other messages left in state after finishing" $ do
+  --     (inch, outch, iq) <- setup
+  --     _ <- writeChan inch $ show testMsg
+  --     (_, newState) <- runStateT (getItemBlocking testKey) iq
+  --     let items = (itemsInternal newState)
+  --     H.keys items `shouldBe` []
 
-  describe "addToQueue" $ do
-    it "is able to add messages to queue which can be fetched" $ do
-      (_, outch, iq) <- setup
-      let action = do
-            addToQueue testMsg
-            getItemBlocking testKey
-      (recvMsg, _) <- runStateT action iq
-      recvMsg `shouldBe` testMsg
+  -- describe "getItemsTimeout" $ do
+  --   it "gets a single item on a timeout of 1 ms" $ do
+  --     (inch, outch, iq) <- setup
+  --     _ <- writeChan inch $ show testMsg
+  --     (recvMsg, _) <- runStateT (getItemsTimeout testKey 1000) iq
+  --     recvMsg `shouldBe` [testMsg]
+
+  --   it "gets 10 items on a timeout of 10 ms" $ do
+  --     (inch, outch, iq) <- setup
+  --     let msgs = (\i -> testMsgIndexContent i) `map` [0..10]
+  --     mapM (writeChan inch . show) msgs
+  --     (recvMsg, _) <- runStateT (getItemsTimeout testKey 10000) iq
+  --     recvMsg `shouldBe` msgs
+
+  --   it "has no other messages left in state after finishing" $ do
+  --     (inch, outch, iq) <- setup
+  --     mapM (\i -> writeChan inch $ show $ testMsgIndexContent i) [0..10]
+  --     (_, newState) <- runStateT (getItemBlocking testKey) iq
+  --     let items = (itemsInternal newState)
+  --     H.keys items `shouldBe` []
+
+  -- describe "addToQueue" $ do
+  --   it "is able to add messages to queue which can be fetched" $ do
+  --     (_, outch, iq) <- setup
+  --     let action = do
+  --           addToQueue testMsg
+  --           getItemBlocking testKey
+  --     (recvMsg, _) <- runStateT action iq
+  --     recvMsg `shouldBe` testMsg

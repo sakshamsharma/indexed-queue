@@ -25,6 +25,7 @@ dependencies:
 - hashable
 - hspec
 - mtl
+- pipes
 - transformers
 - unagi-chan
 - unordered-containers
