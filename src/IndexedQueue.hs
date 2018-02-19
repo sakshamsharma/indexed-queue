@@ -25,37 +25,78 @@ data IndexedQueue bareRep msgType msgIndex =
                , itemsInternal :: H.HashMap msgIndex [msgType]
                }
 
-myProd :: (Eq msgIndex, Hashable msgIndex, Show msgIndex, Show msgType, MonadIO m) =>
-          Integer -> a ->
-          Producer msgType (StateT (IndexedQueue bareRep msgType msgIndex) m) a
-myProd upto act = do
+yoProd :: (Eq msgIndex, Hashable msgIndex, Show msgIndex, Show msgType, MonadIO m) =>
+          Integer ->
+          Producer msgType (StateT (IndexedQueue bareRep msgType msgIndex) m) ()
+yoProd upto = do
   now <- liftIO $ getCPUTime
-  if (now > upto) then do
+  unless (now > upto) $ do
     ch <- lift $ gets channel
     mm <- liftIO $ tryReadChan ch >>= tryRead
     case mm of
-      Nothing -> myProd upto act
+      Nothing -> yoProd upto
       Just bmsg -> do
         conv <- lift $ gets bareToMsg
         yield (conv bmsg)
-        myProd upto act
-  else return act
+        yoProd upto
+
+myProd :: (Eq msgIndex, Hashable msgIndex, Show msgIndex, Show msgType, MonadIO m) =>
+          Integer ->
+          Producer msgType (StateT (IndexedQueue bareRep msgType msgIndex) m) (Maybe a)
+myProd upto = do
+  now <- liftIO $ getCPUTime
+  if (now <= upto) then do
+    ch <- lift $ gets channel
+    mm <- liftIO $ tryReadChan ch >>= tryRead
+    case mm of
+      Nothing -> myProd upto
+      Just bmsg -> do
+        conv <- lift $ gets bareToMsg
+        yield (conv bmsg)
+        myProd upto
+  else return Nothing
 
 myCons :: (Eq msgIndex, Hashable msgIndex, Show msgIndex, Show msgType, MonadIO m) =>
-          (msgType -> m a) -> (a -> Bool) ->
-          Consumer msgType (StateT (IndexedQueue bareRep msgType msgIndex) m) a
-myCons action tocont = do
-  start <- liftIO $ getCPUTime
+          (msgType -> m (Maybe a)) ->
+          Consumer msgType (StateT (IndexedQueue bareRep msgType msgIndex) m) (Maybe a)
+myCons action = do
   item <- await
   res <- lift $ lift $ action item
-  if (tocont res) then myCons action tocont else return res
+  case res of
+    Nothing -> myCons action
+    Just x  -> return res
 
 myEffc :: (Eq msgIndex, Hashable msgIndex, Show msgIndex, Show msgType, MonadIO m) =>
-          msgIndex -> Integer -> (msgType -> m a) -> (a -> Bool) -> a ->
-          Effect (StateT (IndexedQueue bareRep msgType msgIndex) m) a
-myEffc idx timeout act tocont exit = do
+          msgIndex -> Integer -> (msgType -> m (Maybe a)) ->
+          Effect (StateT (IndexedQueue bareRep msgType msgIndex) m) (Maybe a)
+myEffc idx timeout act = do
   now <- liftIO $ getCPUTime
-  myProd (now + timeout * 1000000) exit >-> myCons act tocont
+  myProd (now + timeout * 1000000000) >-> myCons act
+
+accum :: (Eq msgIndex, Hashable msgIndex, Show msgIndex, Show msgType) =>
+         Integer -> [msgType] ->
+         StateT (IndexedQueue bareRep msgType msgIndex) IO [msgType]
+accum upto acc = do
+  now <- liftIO $ getCPUTime
+  if (now > upto) then return acc
+    else do
+      ch <- gets channel
+      mm <- liftIO $ tryReadChan ch >>= tryRead
+      case mm of
+        Nothing -> do
+          liftIO $ threadDelay 400 -- 0.4ms
+          accum upto acc
+        Just bmsg -> do
+          conv <- gets bareToMsg
+          accum upto (conv bmsg : acc)
+
+getItemsTimeout :: (Eq msgIndex, Hashable msgIndex, Show msgIndex, Show msgType) =>
+                   msgIndex -> Integer ->
+                   StateT (IndexedQueue bareRep msgType msgIndex) IO [msgType]
+getItemsTimeout idx timeout = do
+  now <- liftIO $ getCPUTime
+  x <- accum (now + timeout * 1000000000) []
+  return x
 
 recur :: (Eq msgIndex, Hashable msgIndex, Show msgIndex) => msgIndex ->
          OutChan bareRep -> (bareRep -> msgType) -> (msgType -> msgIndex) ->
@@ -77,7 +118,7 @@ recur idx ch conv getIdx items start timeout = do
           recur idx ch conv getIdx items start timeout
 
 getItemTimeout :: (Eq msgIndex, Hashable msgIndex, Show msgIndex) => msgIndex -> Integer ->
-                   StateT (IndexedQueue bareRep msgType msgIndex) IO (Maybe msgType)
+                  StateT (IndexedQueue bareRep msgType msgIndex) IO (Maybe msgType)
 getItemTimeout idx timeout = do
   cch <- gets channel
   conv <- gets bareToMsg
