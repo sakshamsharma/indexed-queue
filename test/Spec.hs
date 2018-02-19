@@ -34,13 +34,21 @@ testMsgIndexContent i = Msg { contents = show i , key = testKey }
 
 spec :: IO ()
 spec = hspec $ do
-  describe "myEffc" $ do
-    it "runs lol" $ do
+  describe "timeFilterShow" $ do
+    it "prints elements without lumping the IO after the timeout" $ do
       (inch, outch, iq) <- setup
-      let msgs = (\i -> testMsgIndexContent i) `map` [0..9]
+      let msgs = testMsgIndexContent `map` [0..9]
       mapM (writeChan inch . show) msgs
-      (_, _) <- runStateT (runEffect (myEffc testKey 5000 print (\_ -> True) ())) iq
+      (_, _) <- runStateT (timeFilterShow 1000 testKey) iq
       True `shouldBe` True
+
+  describe "timeFilterCollect" $ do
+    it "returns all the messages just fine" $ do
+      (inch, outch, iq) <- setup
+      let msgs = testMsgIndexContent `map` [0..9]
+      mapM (writeChan inch . show) msgs
+      (res, niq) <- timeFilterCollect 1000 testKey iq
+      res `shouldBe` msgs
 
     -- it "gets a single item on a timeout of 1 ms" $ do
     --   (inch, outch, iq) <- setup
@@ -55,30 +63,30 @@ spec = hspec $ do
     --   x <- take 5 <$> getItemsTimeout iq testKey 4000
     --   map snd x `shouldBe` take 5 (map Just msgs)
 
-  describe "getItemTimeout" $ do
-    it "gets a single item on a timeout of 1 ms" $ do
-      (inch, outch, iq) <- setup
-      _ <- writeChan inch $ show testMsg
-      (recvMsg, _) <- runStateT (getItemTimeout testKey 1) iq
-      recvMsg `shouldBe` (Just testMsg)
+  -- describe "getItemTimeout" $ do
+  --   it "gets a single item on a timeout of 1 ms" $ do
+  --     (inch, outch, iq) <- setup
+  --     _ <- writeChan inch $ show testMsg
+  --     (recvMsg, _) <- runStateT (getItemTimeout testKey 1) iq
+  --     recvMsg `shouldBe` (Just testMsg)
 
-    it "gets a single item quickly on a timeout of 10000 ms" $ do
-      (inch, outch, iq) <- setup
-      _ <- writeChan inch $ show testMsg
-      (recvMsg, _) <- runStateT (getItemTimeout testKey 10000) iq
-      recvMsg `shouldBe` (Just testMsg)
+  --   it "gets a single item quickly on a timeout of 10000 ms" $ do
+  --     (inch, outch, iq) <- setup
+  --     _ <- writeChan inch $ show testMsg
+  --     (recvMsg, _) <- runStateT (getItemTimeout testKey 10000) iq
+  --     recvMsg `shouldBe` (Just testMsg)
 
-    it "has no other messages left in state after finishing" $ do
-      (inch, outch, iq) <- setup
-      mapM (\i -> writeChan inch $ show $ testMsgIndexContent i) [0..10]
-      (_, newState) <- runStateT (getItemTimeout testKey 1) iq
-      let items = (itemsInternal newState)
-      H.keys items `shouldBe` []
+  --   it "has no other messages left in state after finishing" $ do
+  --     (inch, outch, iq) <- setup
+  --     mapM (\i -> writeChan inch $ show $ testMsgIndexContent i) [0..10]
+  --     (_, newState) <- runStateT (getItemTimeout testKey 1) iq
+  --     let items = (itemsInternal newState)
+  --     H.keys items `shouldBe` []
 
-    it "times out when no message is sent" $ do
-      (inch, outch, iq) <- setup
-      (recvMsg, _) <- runStateT (getItemTimeout testKey 1000) iq
-      recvMsg `shouldBe` Nothing
+  --   it "times out when no message is sent" $ do
+  --     (inch, outch, iq) <- setup
+  --     (recvMsg, _) <- runStateT (getItemTimeout testKey 1000) iq
+  --     recvMsg `shouldBe` Nothing
 
   -- describe "getItemBlocking" $ do
   --   it "gets a single item" $ do

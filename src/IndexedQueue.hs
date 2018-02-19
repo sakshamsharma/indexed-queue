@@ -2,7 +2,8 @@ module IndexedQueue where
 
 import           Control.Concurrent                       hiding
                                                            (getChanContents,
-                                                           readChan, yield)
+                                                           newChan, readChan,
+                                                           yield)
 import           Control.Concurrent.Chan.Unagi.NoBlocking
 import           Control.Exception
 import           Control.Monad
@@ -14,121 +15,123 @@ import           Data.Hashable
 import qualified Data.HashMap.Strict                      as H
 import           Data.List
 import           Data.Maybe
+import           Data.Time.Clock.POSIX
 import           Pipes
-import           System.CPUTime
-import           System.IO.Unsafe
 
-data IndexedQueue bareRep msgType msgIndex =
-  IndexedQueue { channel       :: OutChan bareRep
-               , bareToMsg     :: bareRep -> msgType
-               , msgToIndex    :: msgType -> msgIndex
-               , itemsInternal :: H.HashMap msgIndex [msgType]
+
+data IndexedQueue rep msg index =
+  IndexedQueue { channel       :: OutChan rep
+               , bareToMsg     :: rep -> msg
+               , msgToIndex    :: msg -> index
+               , itemsInternal :: H.HashMap index [msg]
                }
 
-yoProd :: (Eq msgIndex, Hashable msgIndex, Show msgIndex, Show msgType, MonadIO m) =>
-          Integer ->
-          Producer msgType (StateT (IndexedQueue bareRep msgType msgIndex) m) ()
-yoProd upto = do
-  now <- liftIO $ getCPUTime
+timeInMillis :: MonadIO m => m Integer
+timeInMillis = liftIO $ (round . (* 1000)) <$> getPOSIXTime
+
+checkTime :: MonadIO m => Integer -> Producer () m ()
+checkTime upto = do
+  now <- timeInMillis
   unless (now > upto) $ do
-    ch <- lift $ gets channel
-    mm <- liftIO $ tryReadChan ch >>= tryRead
-    case mm of
-      Nothing -> yoProd upto
-      Just bmsg -> do
-        conv <- lift $ gets bareToMsg
-        yield (conv bmsg)
-        yoProd upto
+    yield ()
+    checkTime upto
 
-myProd :: (Eq msgIndex, Hashable msgIndex, Show msgIndex, Show msgType, MonadIO m) =>
-          Integer ->
-          Producer msgType (StateT (IndexedQueue bareRep msgType msgIndex) m) (Maybe a)
-myProd upto = do
-  now <- liftIO $ getCPUTime
-  if (now <= upto) then do
-    ch <- lift $ gets channel
-    mm <- liftIO $ tryReadChan ch >>= tryRead
-    case mm of
-      Nothing -> myProd upto
-      Just bmsg -> do
-        conv <- lift $ gets bareToMsg
-        yield (conv bmsg)
-        myProd upto
-  else return Nothing
-
-myCons :: (Eq msgIndex, Hashable msgIndex, Show msgIndex, Show msgType, MonadIO m) =>
-          (msgType -> m (Maybe a)) ->
-          Consumer msgType (StateT (IndexedQueue bareRep msgType msgIndex) m) (Maybe a)
-myCons action = do
-  item <- await
-  res <- lift $ lift $ action item
-  case res of
-    Nothing -> myCons action
-    Just x  -> return res
-
-myEffc :: (Eq msgIndex, Hashable msgIndex, Show msgIndex, Show msgType, MonadIO m) =>
-          msgIndex -> Integer -> (msgType -> m (Maybe a)) ->
-          Effect (StateT (IndexedQueue bareRep msgType msgIndex) m) (Maybe a)
-myEffc idx timeout act = do
-  now <- liftIO $ getCPUTime
-  myProd (now + timeout * 1000000000) >-> myCons act
-
-accum :: (Eq msgIndex, Hashable msgIndex, Show msgIndex, Show msgType) =>
-         Integer -> [msgType] ->
-         StateT (IndexedQueue bareRep msgType msgIndex) IO [msgType]
-accum upto acc = do
-  now <- liftIO $ getCPUTime
-  if (now > upto) then return acc
+checkTimeMaybe :: MonadIO m => Integer -> Producer () m (Maybe a)
+checkTimeMaybe upto = do
+  now <- timeInMillis
+  if (now > upto) then return Nothing
     else do
-      ch <- gets channel
-      mm <- liftIO $ tryReadChan ch >>= tryRead
-      case mm of
-        Nothing -> do
-          liftIO $ threadDelay 400 -- 0.4ms
-          accum upto acc
-        Just bmsg -> do
-          conv <- gets bareToMsg
-          accum upto (conv bmsg : acc)
+    yield ()
+    checkTimeMaybe upto
 
-getItemsTimeout :: (Eq msgIndex, Hashable msgIndex, Show msgIndex, Show msgType) =>
-                   msgIndex -> Integer ->
-                   StateT (IndexedQueue bareRep msgType msgIndex) IO [msgType]
-getItemsTimeout idx timeout = do
-  now <- liftIO $ getCPUTime
-  x <- accum (now + timeout * 1000000000) []
-  return x
+checkCache :: (Eq index, Hashable index, Show msg, MonadIO m) =>
+              index ->
+              Pipe () (Maybe msg) (StateT (IndexedQueue rep msg index) m) (Maybe a)
+checkCache idx = do
+  await
+  items <- lift $ gets itemsInternal
+  case H.lookup idx items of
+    Just (x:xs) -> do
+      yield $ Just x
+      lift $ modify $ \s -> s { itemsInternal = H.insert idx xs items }
+      checkCache idx
+    Nothing -> do
+      yield Nothing
+      checkCache idx
 
-recur :: (Eq msgIndex, Hashable msgIndex, Show msgIndex) => msgIndex ->
-         OutChan bareRep -> (bareRep -> msgType) -> (msgType -> msgIndex) ->
-         H.HashMap msgIndex [msgType] -> Integer -> Integer ->
-         StateT (IndexedQueue bareRep msgType msgIndex) IO (Maybe msgType)
-recur idx ch conv getIdx items start timeout = do
-  now <- liftIO $ getCPUTime
-  if now > start + timeout then return Nothing
-  else do
-    bmsgx <- liftIO $ tryReadChan ch >>= tryRead
-    case bmsgx of
-      Nothing -> recur idx ch conv getIdx items start timeout
-      Just bmsg -> do
-        let msg = conv bmsg
-        let nidx = getIdx msg
-        if (nidx == idx) then return $ Just msg
-          else do
-          modify $ \s -> s { itemsInternal = H.insertWith (++) nidx [msg] items }
-          recur idx ch conv getIdx items start timeout
+getMsg :: (Eq index, Hashable index, Show msg, MonadIO m) =>
+          Pipe (Maybe msg) msg (StateT (IndexedQueue rep msg index) m) (Maybe a)
+getMsg = do
+  fromCache <- await
+  case fromCache of
+    Just x -> do
+      yield x
+      getMsg
+    Nothing -> do
+        ch <- lift $ gets channel
+        msg <- liftIO $ tryReadChan ch >>= tryRead
+        case msg of
+            Nothing -> getMsg
+            Just x  -> do
+                conv <- lift $ gets bareToMsg
+                yield $ conv x
+                getMsg
 
-getItemTimeout :: (Eq msgIndex, Hashable msgIndex, Show msgIndex) => msgIndex -> Integer ->
-                  StateT (IndexedQueue bareRep msgType msgIndex) IO (Maybe msgType)
-getItemTimeout idx timeout = do
-  cch <- gets channel
-  conv <- gets bareToMsg
-  getIdx <- gets msgToIndex
-  items <- gets itemsInternal
-  start <- liftIO $ getCPUTime
-  recur idx cch conv getIdx items start (timeout * 1000000000)
+filterMsg :: (Eq index, Hashable index, Show msg, MonadIO m) =>
+             index ->
+             Pipe msg msg (StateT (IndexedQueue rep msg index) m) (Maybe a)
+filterMsg idx = do
+  msg <- await
+  getIdx <- lift $ gets msgToIndex
+  let nidx = getIdx msg
+  if nidx == idx then yield msg
+    else do
+    items <- lift $ gets itemsInternal
+    lift $ modify $ \s -> s { itemsInternal = H.insertWith (++) nidx [msg] items }
+  filterMsg idx
 
-addToQueue :: (Eq msgIndex, Hashable msgIndex) => msgType ->
-              StateT (IndexedQueue bareRep msgType msgIndex) IO ()
+consumer :: (Eq index, Hashable index, Show msg, MonadIO m) =>
+            (msg -> m (Maybe a)) ->
+            Consumer msg (StateT (IndexedQueue rep msg index) m) (Maybe a)
+consumer act = do
+  item <- await
+  result <- lift $ lift $ act item
+  case result of
+    Nothing -> consumer act
+    Just x  -> return result
+
+timeFilterShow :: (Eq index, Hashable index, Show msg, MonadIO m) =>
+                  Integer -> index ->
+                  StateT (IndexedQueue rep msg index) m ()
+timeFilterShow timeout idx = do
+  let act x = do
+        liftIO . putStrLn . show $ x
+        return Nothing
+  _ <- timeFilterAction timeout idx act
+  return ()
+
+timeFilterCollect :: (Eq index, Hashable index, Show msg) =>
+                     Integer -> index ->
+                     (IndexedQueue rep msg index) -> IO ([msg], IndexedQueue rep msg index)
+timeFilterCollect timeout idx iq = do
+  let act x = do
+        prev <- get
+        let new = x : prev
+        put new
+        return Nothing
+  ((_, niq), res) <- runStateT (runStateT (timeFilterAction timeout idx act) iq) []
+  return (reverse res, niq)
+
+timeFilterAction :: (Eq index, Hashable index, Show msg, MonadIO m) =>
+                    Integer -> index -> (msg -> m (Maybe a)) ->
+                    StateT (IndexedQueue rep msg index) m (Maybe a)
+timeFilterAction timeout idx action = do
+  now <- timeInMillis
+  let producer = checkTimeMaybe (now + timeout) >-> checkCache idx >-> (getMsg >-> filterMsg idx)
+  runEffect $ producer >-> consumer action
+
+addToQueue :: (Eq index, Hashable index) => msg ->
+              StateT (IndexedQueue rep msg index) IO ()
 addToQueue msg = do
   items <- gets itemsInternal
   getIdx <- gets msgToIndex
