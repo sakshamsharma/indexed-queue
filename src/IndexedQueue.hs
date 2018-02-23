@@ -1,20 +1,11 @@
 module IndexedQueue where
 
-import           Control.Concurrent                       hiding
-                                                           (getChanContents,
-                                                           newChan, readChan,
-                                                           yield)
 import           Control.Concurrent.Chan.Unagi.NoBlocking
-import           Control.Exception
 import           Control.Monad
-import           Control.Monad.State.Lazy                 (lift, liftIO, liftM2,
-                                                           when)
+import           Control.Monad.State.Lazy                 (lift, liftIO)
 import           Control.Monad.Trans.State.Lazy
-import           Data.Either.Combinators
 import           Data.Hashable
 import qualified Data.HashMap.Strict                      as H
-import           Data.List
-import           Data.Maybe
 import           Data.Time.Clock.POSIX
 import           Pipes
 
@@ -39,7 +30,7 @@ checkTime upto = do
 checkTimeMaybe :: MonadIO m => Integer -> Producer () m (Maybe a)
 checkTimeMaybe upto = do
   now <- timeInMillis
-  if (now > upto) then return Nothing
+  if now > upto then return Nothing
     else do
     yield ()
     checkTimeMaybe upto
@@ -55,7 +46,7 @@ checkCache idx = do
       yield $ Just x
       lift $ modify $ \s -> s { itemsInternal = H.insert idx xs items }
       checkCache idx
-    Nothing -> do
+    _ -> do
       yield Nothing
       checkCache idx
 
@@ -98,21 +89,21 @@ consumer act = do
   result <- lift $ lift $ act item
   case result of
     Nothing -> consumer act
-    Just x  -> return result
+    _       -> return result
 
 timeFilterShow :: (Eq index, Hashable index, Show msg, MonadIO m) =>
                   Integer -> index ->
                   StateT (IndexedQueue rep msg index) m ()
 timeFilterShow timeout idx = do
   let act x = do
-        liftIO . putStrLn . show $ x
+        liftIO . print $ x
         return Nothing
   _ <- timeFilterAction timeout idx act
   return ()
 
 timeFilterCollect :: (Eq index, Hashable index, Show msg) =>
                      Integer -> index ->
-                     (IndexedQueue rep msg index) -> IO ([msg], IndexedQueue rep msg index)
+                     IndexedQueue rep msg index -> IO ([msg], IndexedQueue rep msg index)
 timeFilterCollect timeout idx iq = do
   let act x = do
         prev <- get
