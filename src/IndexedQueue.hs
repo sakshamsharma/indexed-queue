@@ -20,6 +20,16 @@ data IndexedQueue rep msg index =
 timeInMillis :: MonadIO m => m Integer
 timeInMillis = liftIO $ (round . (* 1000)) <$> getPOSIXTime
 
+-- | Helped function to add items to the message queue inside the state.
+addToQueue :: (Eq index, Hashable index) => msg ->
+              StateT (IndexedQueue rep msg index) IO ()
+addToQueue msg = do
+  items <- gets itemsInternal
+  getIdx <- gets msgToIndex
+  modify $ \s -> s { itemsInternal = H.insertWith (++) (getIdx msg) [msg] items }
+
+-- | Producer, which continues to yield units () as long the allowed time
+-- is not exceeded.
 checkTime :: MonadIO m => Integer -> Producer () m ()
 checkTime upto = do
   now <- timeInMillis
@@ -27,6 +37,8 @@ checkTime upto = do
     yield ()
     checkTime upto
 
+-- | Producer, which continues to yield units () as long the allowed time
+-- is not exceeded. After this, it returns a Nothing.
 checkTimeMaybe :: MonadIO m => Integer -> Producer () m (Maybe a)
 checkTimeMaybe upto = do
   now <- timeInMillis
@@ -35,6 +47,8 @@ checkTimeMaybe upto = do
     yield ()
     checkTimeMaybe upto
 
+-- | Pipe which consumes a Unit (), and yields a Just message from the cache,
+-- if there was one there. Otherwise it yields a Nothing.
 checkCache :: (Eq index, Hashable index, Show msg, Read msg, MonadIO m) =>
               index ->
               Pipe () (Maybe msg) (StateT (IndexedQueue rep msg index) m) (Maybe a)
@@ -50,6 +64,9 @@ checkCache idx = do
       yield Nothing
       checkCache idx
 
+-- | Pipe which consumes a Maybe msg. If there was already a message (in the input)
+-- it will yield it. Else, it will try to find a new message from the message queue.
+-- It will not block.
 getMsg :: (Eq index, Hashable index, Show msg, Read msg, MonadIO m) =>
           Pipe (Maybe msg) msg (StateT (IndexedQueue rep msg index) m) (Maybe a)
 getMsg = do
@@ -68,6 +85,8 @@ getMsg = do
                 yield $ conv x
                 getMsg
 
+-- | Pipe which consumes a message, and yields it if it matches the provided
+-- index. Else, it will put this message into the cache, and yield nothing.
 filterMsg :: (Eq index, Hashable index, Show msg, Read msg, MonadIO m) =>
              index ->
              Pipe msg msg (StateT (IndexedQueue rep msg index) m) (Maybe a)
@@ -81,6 +100,11 @@ filterMsg idx = do
     lift $ modify $ \s -> s { itemsInternal = H.insertWith (++) nidx [msg] items }
   filterMsg idx
 
+-- | Consumer which runs a provided action on every yield-ed element.
+-- This is continued as long as the action keeps returning a Nothing (signifying)
+-- that the requirement for messages has not yet finished.
+-- The moment the action returns a Just, that value is considered the result of
+-- this whole computation, and consumer terminates.
 consumer :: (Eq index, Hashable index, Show msg, Read msg, MonadIO m) =>
             (msg -> m (Maybe a)) ->
             Consumer msg (StateT (IndexedQueue rep msg index) m) (Maybe a)
@@ -91,6 +115,8 @@ consumer act = do
     Nothing -> consumer act
     _       -> return result
 
+-- | Show messages from the queue.
+-- Filter messages by index, and enforce a time limit.
 timeFilterShow :: (Eq index, Hashable index, Show msg, Read msg, MonadIO m) =>
                   Integer -> index ->
                   StateT (IndexedQueue rep msg index) m ()
@@ -101,6 +127,8 @@ timeFilterShow timeout idx = do
   _ <- timeFilterAction timeout idx act
   return ()
 
+-- | Lump up messages of the queue.
+-- Filter messages by index, and enforce a time limit.
 timeFilterCollect :: (Eq index, Hashable index, Show msg, Read msg) =>
                      Integer -> index ->
                      IndexedQueue rep msg index -> IO ([msg], IndexedQueue rep msg index)
@@ -113,7 +141,8 @@ timeFilterCollect timeout idx iq = do
   ((_, niq), res) <- runStateT (runStateT (timeFilterAction timeout idx act) iq) []
   return (reverse res, niq)
 
--- | Executes action on receiving a message of type index.
+-- | Executes action on receiving a message in the queue.
+-- Filter messages by index, and enforce a time limit.
 timeFilterAction :: (Eq index, Hashable index, Show msg, Read msg, MonadIO m) =>
                     Integer -> index -> (msg -> m (Maybe a)) ->
                     StateT (IndexedQueue rep msg index) m (Maybe a)
@@ -121,10 +150,3 @@ timeFilterAction timeout idx action = do
   now <- timeInMillis
   let producer = checkTimeMaybe (now + timeout) >-> checkCache idx >-> (getMsg >-> filterMsg idx)
   runEffect $ producer >-> consumer action
-
-addToQueue :: (Eq index, Hashable index) => msg ->
-              StateT (IndexedQueue rep msg index) IO ()
-addToQueue msg = do
-  items <- gets itemsInternal
-  getIdx <- gets msgToIndex
-  modify $ \s -> s { itemsInternal = H.insertWith (++) (getIdx msg) [msg] items }
