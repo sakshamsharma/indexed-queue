@@ -29,15 +29,6 @@ addToQueue msg = do
   modify $ \s -> s { itemsInternal = H.insertWith (++) (getIdx msg) [msg] items }
 
 -- | Producer, which continues to yield units () as long the allowed time
--- is not exceeded.
-checkTime :: MonadIO m => Integer -> Producer () m ()
-checkTime upto = do
-  now <- timeInMillis
-  unless (now > upto) $ do
-    yield ()
-    checkTime upto
-
--- | Producer, which continues to yield units () as long the allowed time
 -- is not exceeded. After this, it returns a Nothing.
 checkTimeMaybe :: MonadIO m => Integer -> Producer () m (Maybe a)
 checkTimeMaybe upto = do
@@ -127,7 +118,7 @@ timeFilterShow timeout idx = do
   _ <- timeFilterAction timeout idx act
   return ()
 
--- | Lump up messages of the queue.
+-- | Lump up messages of the queue, and return them all at once.
 -- Filter messages by index, and enforce a time limit.
 timeFilterCollect :: (Eq index, Hashable index, Show msg, Read msg) =>
                      Integer -> index ->
