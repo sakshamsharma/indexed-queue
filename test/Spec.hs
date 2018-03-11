@@ -39,28 +39,27 @@ testMsgIndexContent i = Msg { contents = show i , key = testKey }
 
 spec :: IO ()
 spec = hspec $ do
+
   describe "timeFilterAction" $ do
     it "Completes the IO actions as elements get available, and not after the timeout" $ do
       (inch, outch, inQueue) <- setup
       let msgs = testMsgIndexContent `map` [0..9]
       mapM (writeChan inch . show) msgs
+      myMVar <- newMVar $ testMsgIndexContent (-1)
+
       let action v = do
-            putStrLn . show $ v
+            modifyMVar_ myMVar (\_ -> return v)
             return Nothing
       let myT = do
-            runStateT (timeFilterAction 4000 testKey action) inQueue
+            runStateT (timeFilterAction 5000 testKey action) inQueue
             return ()
-      tid <- forkIO $ myT
-      killThread tid
-      True `shouldBe` True
 
-  describe "timeFilterShow" $ do
-    it "prints elements without lumping the IO after the timeout" $ do
-      (inch, outch, iq) <- setup
-      let msgs = testMsgIndexContent `map` [0..9]
-      mapM (writeChan inch . show) msgs
-      (_, _) <- runStateT (timeFilterShow 1000 testKey) iq
-      True `shouldBe` True
+      tid <- forkIOWithUnmask $ \unmask -> unmask myT
+      threadDelay 10000 -- Wait 10ms
+      killThread tid
+      finalVal <- readMVar myMVar
+      (contents finalVal) `shouldBe` "9"
+
 
   describe "timeFilterCollect" $ do
     it "returns all the messages just fine" $ do
