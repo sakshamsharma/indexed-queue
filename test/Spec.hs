@@ -48,11 +48,11 @@ spec = hspec $ do
       myMVar <- newMVar $ testMsgIndexContent (-1)
 
       let action v = do
-            modifyMVar_ myMVar (\_ -> return v)
+            liftIO $ modifyMVar_ myMVar (\_ -> return v)
             return Nothing
       let myT = do
             -- May take up to 5 seconds.
-            runStateT (timeFilterAction 5000 testKey action) inQueue
+            processLazyList 5000000 testKey inQueue action
             return ()
 
       let lateMessageToQueueAction = do
@@ -60,10 +60,10 @@ spec = hspec $ do
             threadDelay 1000000
             writeChan inch . show $ testMsgIndexContent 20
 
-      -- We kill the processing after 10 ms.
+      -- We kill the processing after 20 ms.
       tid <- forkIOWithUnmask $ \unmask -> unmask myT
       forkIO $ lateMessageToQueueAction
-      threadDelay 10000 -- Wait 10ms
+      threadDelay 20000 -- Wait 20ms
       killThread tid
 
       -- The final message should not have been the one sent after 1 second.
@@ -71,10 +71,10 @@ spec = hspec $ do
       (contents finalVal) `shouldBe` "19"
 
 
-  describe "timeFilterCollect" $ do
+  describe "getItemsBlocking" $ do
     it "returns all the messages lumped together, after the timeout" $ do
       (inch, outch, iq) <- setup
       let msgs = testMsgIndexContent `map` [0..99]
       mapM (writeChan inch . show) msgs
-      (res, niq) <- timeFilterCollect 10 testKey iq
+      (res, niq) <- getItemsBlocking 10000 testKey iq
       res `shouldBe` msgs

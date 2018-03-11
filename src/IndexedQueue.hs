@@ -17,10 +17,10 @@ data IndexedQueue rep msg index =
                , itemsInternal :: H.HashMap index [msg]
                }
 
-timeInMillis :: MonadIO m => m Integer
-timeInMillis = liftIO $ (round . (* 1000)) <$> getPOSIXTime
+timeInMicros :: MonadIO m => m Integer
+timeInMicros = liftIO $ (round . (* 1000000)) <$> getPOSIXTime
 
--- | Helped function to add items to the message queue inside the state.
+-- | Helper function to add items to the message queue inside the state.
 addToQueue :: (Eq index, Hashable index) => msg ->
               StateT (IndexedQueue rep msg index) IO ()
 addToQueue msg = do
@@ -32,7 +32,7 @@ addToQueue msg = do
 -- is not exceeded. After this, it returns a Nothing.
 checkTimeMaybe :: MonadIO m => Integer -> Producer () m (Maybe a)
 checkTimeMaybe upto = do
-  now <- timeInMillis
+  now <- timeInMicros
   if now > upto then return Nothing
     else do
     yield ()
@@ -106,7 +106,7 @@ consumer act = do
     Nothing -> consumer act
     _       -> return result
 
--- | Show messages from the queue.
+-- | timeFilterShow shows messages from the queue.
 -- Filter messages by index, and enforce a time limit.
 timeFilterShow :: (Eq index, Hashable index, Show msg, Read msg, MonadIO m) =>
                   Integer -> index ->
@@ -118,12 +118,23 @@ timeFilterShow timeout idx = do
   _ <- timeFilterAction timeout idx act
   return ()
 
--- | Lump up messages of the queue, and return them all at once.
+-- | timeFilterAction executes action on receiving a message in the queue.
 -- Filter messages by index, and enforce a time limit.
-timeFilterCollect :: (Eq index, Hashable index, Show msg, Read msg) =>
+-- Consider using getItemsBlocking, getItem or processLazyList for simple cases.
+timeFilterAction :: (Eq index, Hashable index, Show msg, Read msg, MonadIO m) =>
+                    Integer -> index -> (msg -> m (Maybe a)) ->
+                    StateT (IndexedQueue rep msg index) m (Maybe a)
+timeFilterAction timeout idx action = do
+  now <- timeInMicros
+  let producer = checkTimeMaybe (now + timeout) >-> checkCache idx >-> (getMsg >-> filterMsg idx)
+  runEffect $ producer >-> consumer action
+
+-- | getItemsBlocking fetches items from an IndexedQueue, whose index matches `index`.
+-- This call blocks for `timeout` microseconds, where timeout is the first argument.
+getItemsBlocking :: (Eq index, Hashable index, Show msg, Read msg) =>
                      Integer -> index ->
                      IndexedQueue rep msg index -> IO ([msg], IndexedQueue rep msg index)
-timeFilterCollect timeout idx iq = do
+getItemsBlocking timeout idx iq = do
   let act x = do
         prev <- get
         let new = x : prev
@@ -132,12 +143,17 @@ timeFilterCollect timeout idx iq = do
   ((_, niq), res) <- runStateT (runStateT (timeFilterAction timeout idx act) iq) []
   return (reverse res, niq)
 
--- | Executes action on receiving a message in the queue.
--- Filter messages by index, and enforce a time limit.
-timeFilterAction :: (Eq index, Hashable index, Show msg, Read msg, MonadIO m) =>
-                    Integer -> index -> (msg -> m (Maybe a)) ->
-                    StateT (IndexedQueue rep msg index) m (Maybe a)
-timeFilterAction timeout idx action = do
-  now <- timeInMillis
-  let producer = checkTimeMaybe (now + timeout) >-> checkCache idx >-> (getMsg >-> filterMsg idx)
-  runEffect $ producer >-> consumer action
+-- | getItem fetches a single item from an IndexedQueue, whose index matches `index`.
+-- This call blocks for `timeout` microseconds, where timeout is the first argument.
+getItemBlocking timeout idx indexedQueue = do
+  let act x = return $ Just x
+  ((res, niq), _) <- runStateT (runStateT (timeFilterAction timeout idx act) indexedQueue) ()
+  return (res, niq)
+
+-- | processLazyList executes the provided action on all messages of the indexed queue,
+-- whose index matches `index`.
+-- This call blocks for `timeout` microseconds, where timeout is the first argument.
+-- The processing of each message is done as soon as the message arrives.
+processLazyList timeout idx indexedQueue action = do
+  ((res, niq), _) <- runStateT (runStateT (timeFilterAction timeout idx action) indexedQueue) ()
+  return (res, niq)
