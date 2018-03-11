@@ -78,3 +78,14 @@ spec = hspec $ do
       mapM (writeChan inch . show) msgs
       (res, niq) <- getItemsBlocking 10000 testKey iq
       res `shouldBe` msgs
+
+    it "works well even when message types are interleaved" $ do
+      (inch, outch, iq) <- setup
+      let msgs = (\i -> Msg { contents = show i, key = testKey }) `map` [0..99]
+      let otherMsgs = (\i -> Msg { contents = "Fake" ++ show i, key = "Key" ++ show i })
+                      `map` [0..99]
+      let interleave xs ys = concat (zipWith (\x y -> [x]++[y]) xs ys)
+      let sendingMsgs = interleave msgs otherMsgs
+      mapM (writeChan inch . show) sendingMsgs
+      (res, niq) <- getItemsBlocking 50000 testKey iq
+      res `shouldBe` msgs

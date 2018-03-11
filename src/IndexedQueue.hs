@@ -21,12 +21,19 @@ timeInMicros :: MonadIO m => m Integer
 timeInMicros = liftIO $ (round . (* 1000000)) <$> getPOSIXTime
 
 -- | Helper function to add items to the message queue inside the state.
-addToQueue :: (Eq index, Hashable index) => msg ->
-              StateT (IndexedQueue rep msg index) IO ()
-addToQueue msg = do
+addToQueueState :: (Eq index, Show index, Hashable index) => msg ->
+                   StateT (IndexedQueue rep msg index) IO ()
+addToQueueState msg = do
   items <- gets itemsInternal
   getIdx <- gets msgToIndex
   modify $ \s -> s { itemsInternal = H.insertWith (++) (getIdx msg) [msg] items }
+
+addToQueue :: (Eq index, Show index, Hashable index, MonadIO m) =>
+              IndexedQueue rep msg index -> msg ->
+              m (IndexedQueue rep msg index)
+addToQueue iq msg = do
+  (_, niq) <- liftIO $ runStateT (addToQueueState msg) iq
+  return niq
 
 -- | Producer, which continues to yield units () as long the allowed time
 -- is not exceeded. After this, it returns a Nothing.
@@ -72,9 +79,9 @@ getMsg = do
         case msg of
             Nothing -> getMsg
             Just x  -> do
-                conv <- lift $ gets bareToMsg
-                yield $ conv x
-                getMsg
+              conv <- lift $ gets bareToMsg
+              yield $ conv x
+              getMsg
 
 -- | Pipe which consumes a message, and yields it if it matches the provided
 -- index. Else, it will put this message into the cache, and yield nothing.
