@@ -1,8 +1,10 @@
 module IndexedQueue where
 
 import           Control.Concurrent.Chan.Unagi.NoBlocking
+import           Control.Concurrent.STM.TVar
 import           Control.Monad
 import           Control.Monad.State.Lazy                 (lift, liftIO)
+import           Control.Monad.STM
 import           Control.Monad.Trans.State.Lazy
 import           Data.Hashable
 import qualified Data.HashMap.Strict                      as H
@@ -14,7 +16,7 @@ data IndexedQueue rep msg index =
   IndexedQueue { channel       :: OutChan rep
                , bareToMsg     :: rep -> msg
                , msgToIndex    :: msg -> index
-               , itemsInternal :: H.HashMap index [msg]
+               , itemsInternal :: TVar (H.HashMap index [msg])
                }
 
 timeInMicros :: MonadIO m => m Integer
@@ -24,9 +26,10 @@ timeInMicros = liftIO $ (round . (* 1000000)) <$> getPOSIXTime
 addToQueueState :: (Eq index, Show index, Hashable index) => msg ->
                    StateT (IndexedQueue rep msg index) IO ()
 addToQueueState msg = do
-  items <- gets itemsInternal
   getIdx <- gets msgToIndex
-  modify $ \s -> s { itemsInternal = H.insertWith (++) (getIdx msg) [msg] items }
+  itemsT <- gets itemsInternal
+  liftIO $ atomically $ do
+    modifyTVar' itemsT (H.insertWith (++) (getIdx msg) [msg])
 
 addToQueue :: (Eq index, Show index, Hashable index, MonadIO m) =>
               IndexedQueue rep msg index -> msg ->
@@ -52,11 +55,12 @@ checkCache :: (Eq index, Hashable index, Show msg, Read msg, MonadIO m) =>
               Pipe () (Maybe msg) (StateT (IndexedQueue rep msg index) m) (Maybe a)
 checkCache idx = do
   await
-  items <- lift $ gets itemsInternal
+  itemsT <- lift $ gets itemsInternal
+  items <- liftIO $ readTVarIO itemsT
   case H.lookup idx items of
     Just (x:xs) -> do
       yield $ Just x
-      lift $ modify $ \s -> s { itemsInternal = H.insert idx xs items }
+      liftIO $ atomically $ modifyTVar' itemsT $ H.insert idx xs
       checkCache idx
     _ -> do
       yield Nothing
@@ -94,8 +98,9 @@ filterMsg idx = do
   let nidx = getIdx msg
   if nidx == idx then yield msg
     else do
-    items <- lift $ gets itemsInternal
-    lift $ modify $ \s -> s { itemsInternal = H.insertWith (++) nidx [msg] items }
+    itemsT <- lift $ gets itemsInternal
+    items <- liftIO $ readTVarIO itemsT
+    liftIO $ atomically $ modifyTVar' itemsT $ H.insertWith (++) nidx [msg]
   filterMsg idx
 
 -- | Consumer which runs a provided action on every yield-ed element.

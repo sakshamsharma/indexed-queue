@@ -26,6 +26,7 @@ dependencies:
 - hspec
 - mtl
 - pipes
+- stm
 - time
 - transformers
 - unagi-chan

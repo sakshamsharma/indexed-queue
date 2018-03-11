@@ -4,6 +4,7 @@ import           Control.Concurrent                       hiding (newChan,
                                                            readChan, writeChan)
 import           Control.Concurrent.Chan.Unagi.NoBlocking
 import           Control.Concurrent.MVar
+import           Control.Concurrent.STM.TVar
 import           Control.Exception
 import           Control.Monad.State.Lazy
 import qualified Data.HashMap.Strict                      as H
@@ -24,10 +25,11 @@ main = spec
 setup :: IO (InChan String, OutChan String, IndexedQueue String Msg String)
 setup = do
   (inch, outch) <- newChan
+  items <- newTVarIO H.empty
   let iq = IndexedQueue { channel = outch
                         , bareToMsg = read
                         , msgToIndex = key
-                        , itemsInternal = H.empty
+                        , itemsInternal = items
                         }
   return (inch, outch, iq)
 
@@ -63,7 +65,7 @@ spec = hspec $ do
       -- We kill the processing after 20 ms.
       tid <- forkIOWithUnmask $ \unmask -> unmask myT
       forkIO $ lateMessageToQueueAction
-      threadDelay 20000 -- Wait 20ms
+      threadDelay 100000 -- Wait 20ms
       killThread tid
 
       -- The final message should not have been the one sent after 1 second.
@@ -87,5 +89,17 @@ spec = hspec $ do
       let interleave xs ys = concat (zipWith (\x y -> [x]++[y]) xs ys)
       let sendingMsgs = interleave msgs otherMsgs
       mapM (writeChan inch . show) sendingMsgs
-      (res, niq) <- getItemsBlocking 50000 testKey iq
+      (res, niq) <- getItemsBlocking 100000 testKey iq
       res `shouldBe` msgs
+
+    it "fetching two different keys one-after-the-other works" $ do
+      (inch, outch, iq) <- setup
+      let msgs = (\i -> Msg { contents = show i, key = "Key1" }) `map` [0..99]
+      let otherMsgs = (\i -> Msg { contents = "Fake" ++ show i, key = "Key2"})
+                      `map` [0..99]
+      let interleave xs ys = concat (zipWith (\x y -> [x]++[y]) xs ys)
+      let sendingMsgs = interleave msgs otherMsgs
+      mapM (writeChan inch . show) sendingMsgs
+      (res, niq) <- getItemsBlocking 50000 "Key1" iq
+      (res2, niq2) <- getItemsBlocking 50000 "Key2" niq
+      res2 `shouldBe` otherMsgs
