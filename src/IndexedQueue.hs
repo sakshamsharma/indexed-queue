@@ -35,7 +35,7 @@ checkTimeMaybe upto = do
     yield ()
     checkTimeMaybe upto
 
-checkCache :: (Eq index, Hashable index, Show msg, MonadIO m) =>
+checkCache :: (Eq index, Hashable index, Show msg, Read msg, MonadIO m) =>
               index ->
               Pipe () (Maybe msg) (StateT (IndexedQueue rep msg index) m) (Maybe a)
 checkCache idx = do
@@ -50,7 +50,7 @@ checkCache idx = do
       yield Nothing
       checkCache idx
 
-getMsg :: (Eq index, Hashable index, Show msg, MonadIO m) =>
+getMsg :: (Eq index, Hashable index, Show msg, Read msg, MonadIO m) =>
           Pipe (Maybe msg) msg (StateT (IndexedQueue rep msg index) m) (Maybe a)
 getMsg = do
   fromCache <- await
@@ -68,7 +68,7 @@ getMsg = do
                 yield $ conv x
                 getMsg
 
-filterMsg :: (Eq index, Hashable index, Show msg, MonadIO m) =>
+filterMsg :: (Eq index, Hashable index, Show msg, Read msg, MonadIO m) =>
              index ->
              Pipe msg msg (StateT (IndexedQueue rep msg index) m) (Maybe a)
 filterMsg idx = do
@@ -81,7 +81,7 @@ filterMsg idx = do
     lift $ modify $ \s -> s { itemsInternal = H.insertWith (++) nidx [msg] items }
   filterMsg idx
 
-consumer :: (Eq index, Hashable index, Show msg, MonadIO m) =>
+consumer :: (Eq index, Hashable index, Show msg, Read msg, MonadIO m) =>
             (msg -> m (Maybe a)) ->
             Consumer msg (StateT (IndexedQueue rep msg index) m) (Maybe a)
 consumer act = do
@@ -91,7 +91,7 @@ consumer act = do
     Nothing -> consumer act
     _       -> return result
 
-timeFilterShow :: (Eq index, Hashable index, Show msg, MonadIO m) =>
+timeFilterShow :: (Eq index, Hashable index, Show msg, Read msg, MonadIO m) =>
                   Integer -> index ->
                   StateT (IndexedQueue rep msg index) m ()
 timeFilterShow timeout idx = do
@@ -101,7 +101,7 @@ timeFilterShow timeout idx = do
   _ <- timeFilterAction timeout idx act
   return ()
 
-timeFilterCollect :: (Eq index, Hashable index, Show msg) =>
+timeFilterCollect :: (Eq index, Hashable index, Show msg, Read msg) =>
                      Integer -> index ->
                      IndexedQueue rep msg index -> IO ([msg], IndexedQueue rep msg index)
 timeFilterCollect timeout idx iq = do
@@ -113,7 +113,8 @@ timeFilterCollect timeout idx iq = do
   ((_, niq), res) <- runStateT (runStateT (timeFilterAction timeout idx act) iq) []
   return (reverse res, niq)
 
-timeFilterAction :: (Eq index, Hashable index, Show msg, MonadIO m) =>
+-- | Executes action on receiving a message of type index.
+timeFilterAction :: (Eq index, Hashable index, Show msg, Read msg, MonadIO m) =>
                     Integer -> index -> (msg -> m (Maybe a)) ->
                     StateT (IndexedQueue rep msg index) m (Maybe a)
 timeFilterAction timeout idx action = do

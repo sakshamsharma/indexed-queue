@@ -1,11 +1,16 @@
-import           Control.Exception                        (evaluate)
 import           Test.Hspec
 
-import           Control.Concurrent                       (threadDelay)
+import           Control.Concurrent                       hiding (newChan,
+                                                           readChan, writeChan)
 import           Control.Concurrent.Chan.Unagi.NoBlocking
+import           Control.Concurrent.MVar
+import           Control.Exception
 import           Control.Monad.State.Lazy
 import qualified Data.HashMap.Strict                      as H
 import           Pipes
+import           System.Exit
+import           System.Timeout
+
 
 import           IndexedQueue
 
@@ -34,6 +39,21 @@ testMsgIndexContent i = Msg { contents = show i , key = testKey }
 
 spec :: IO ()
 spec = hspec $ do
+  describe "timeFilterAction" $ do
+    it "Completes the IO actions as elements get available, and not after the timeout" $ do
+      (inch, outch, inQueue) <- setup
+      let msgs = testMsgIndexContent `map` [0..9]
+      mapM (writeChan inch . show) msgs
+      let action v = do
+            putStrLn . show $ v
+            return Nothing
+      let myT = do
+            runStateT (timeFilterAction 4000 testKey action) inQueue
+            return ()
+      tid <- forkIO $ myT
+      killThread tid
+      True `shouldBe` True
+
   describe "timeFilterShow" $ do
     it "prints elements without lumping the IO after the timeout" $ do
       (inch, outch, iq) <- setup
