@@ -101,7 +101,7 @@ filterMsg idx = do
   filterMsg idx
 
 -- | Consumer which runs a provided action on every yield-ed element.
--- This is continued as long as the action keeps returning a Nothing (signifying)
+-- This is continued as long as the action returns a Nothing, signifying
 -- that the requirement for messages has not yet finished.
 -- The moment the action returns a Just, that value is considered the result of
 -- this whole computation, and consumer terminates.
