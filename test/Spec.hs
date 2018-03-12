@@ -25,12 +25,7 @@ main = spec
 setup :: IO (InChan String, OutChan String, IndexedQueue String Msg String)
 setup = do
   (inch, outch) <- newChan
-  items <- newTVarIO H.empty
-  let iq = IndexedQueue { channel = outch
-                        , bareToMsg = read
-                        , msgToIndex = key
-                        , itemsInternal = items
-                        }
+  iq <- newIndexedQueue outch read key
   return (inch, outch, iq)
 
 testContent = "this is ** testing"

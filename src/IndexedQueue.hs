@@ -19,6 +19,18 @@ data IndexedQueue rep msg index =
                , itemsInternal :: TVar (H.HashMap index [msg])
                }
 
+-- | Create a new IndexedQueue, given the input channel and conversion functions.
+newIndexedQueue :: (Eq index, Hashable index, Show msg, Read msg, MonadIO m) =>
+                   OutChan rep -> (rep -> msg) -> (msg -> index) ->
+                   m (IndexedQueue rep msg index)
+newIndexedQueue channel_ bareToMsg_ msgToIndex_ = do
+  items <- liftIO $ newTVarIO H.empty
+  return IndexedQueue { channel = channel_
+                      , bareToMsg = bareToMsg_
+                      , msgToIndex = msgToIndex_
+                      , itemsInternal = items
+                      }
+
 timeInMicros :: MonadIO m => m Integer
 timeInMicros = liftIO $ (round . (* 1000000)) <$> getPOSIXTime
 
