@@ -100,7 +100,7 @@ filterMsg idx = do
     else do
     itemsT <- lift $ gets itemsInternal
     items <- liftIO $ readTVarIO itemsT
-    liftIO $ atomically $ modifyTVar' itemsT $ H.insertWith (++) nidx [msg]
+    liftIO $ atomically $ modifyTVar' itemsT $ H.insertWith (\new old -> old ++ new) nidx [msg]
   filterMsg idx
 
 -- | Consumer which runs a provided action on every yield-ed element.
